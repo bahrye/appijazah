@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top">
+    <?!= include('style'); ?>
+  </head>
+  <body>
+    <div class="container">
+      <h2>Login</h2>
+      <form onsubmit="handleLogin(event)">
+        <input type="email" id="email" placeholder="Email" required>
+        <div class="password-wrapper">
+          <input type="password" id="password" placeholder="Password" required>
+          <span class="toggle-password" onclick="togglePasswordVisibility('password', this)" title="Lihat password">
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+          </span>
+        </div>
+        <button type="submit">Login</button>
+      </form>
+      <div id="loginSpinner" class="spinner-container">
+        <div class="spinner"></div>
+      </div>
+      <p><a href="<?= ScriptApp.getService().getUrl() ?>?page=signup">Belum punya akun? Daftar di sini</a></p>
+      <p><a href="<?= ScriptApp.getService().getUrl() ?>?page=reset">Lupa password?</a></p>
+    </div>
+
+    <?!= include('globalScripts'); ?>
+    <script>
+      function handleLogin(event) {
+        event.preventDefault();
+        const email = document.getElementById('email').value;
+        const password = document.getElementById('password').value;
+        document.getElementById('loginSpinner').style.display = 'flex';
+        google.script.run.withSuccessHandler(function(response) {
+          document.getElementById('loginSpinner').style.display = 'none';
+          if (response.startsWith("https://")) {
+            window.location.href = response;
+          } else {
+            alert(response);
+          }
+        }).loginUser(email, password);
+      }
+    </script>
+  </body>
+</html>
