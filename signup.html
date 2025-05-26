@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <base target="_top">
+    <?!= include('style'); ?>
+</head>
+<body>
+    <div class="container">
+        <h2>Daftar Akun</h2>
+
+        <div id="signupFormStep1">
+            <p>Langkah 1: Isi data Anda dan minta OTP.</p>
+            <input type="text" id="nama" placeholder="Nama Sekolah/Madrasah" required>
+            <input type="email" id="email" placeholder="Email Aktif" required>
+            <div class="password-wrapper">
+                <input type="password" id="password" placeholder="Password" required>
+                <span class="toggle-password" onclick="togglePasswordVisibility('password', this)" title="Lihat password">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+                </span>
+            </div>
+            <select id="template" class="styled-select" required>
+                <option value="" disabled selected>-- Pilih Jenjang --</option>
+                <option value="Template A">MI</option>
+                <option value="Template B">MTS</option>
+                <option value="Template C">MA</option>
+            </select>
+            <button type="button" onclick="handleSignupStep1()">Kirim OTP & Lanjutkan</button>
+        </div>
+
+        <div id="signupFormStep2" style="display: none;">
+            <p>Langkah 2: OTP telah dikirim ke <strong id="displayEmail"></strong>.</p>
+            <p>Silakan cek email Anda (termasuk folder spam) dan masukkan kode OTP di bawah ini.</p>
+            <input type="text" id="otp" placeholder="Masukkan 6 digit OTP" required maxlength="6">
+            <button type="button" onclick="handleSignupStep2()">Verifikasi OTP & Daftar</button>
+        </div>
+
+        <div id="signupSpinner" class="spinner-container" style="display: none;">
+            <div class="spinner"></div>
+        </div>
+        <p id="formMessage" style="color: red; margin-top: 10px; text-align: center;"></p>
+        <p style="margin-top: 20px;"><a href="<?= ScriptApp.getService().getUrl() ?>?page=login">Sudah punya akun? Login di sini</a></p>
+    </div>
+
+    <?!= include('globalScripts'); ?>
+    <script>
+        let userEmailForOtpVerification = ''; // Variabel untuk menyimpan email antar step
+
+        function handleSignupStep1() {
+            const nama = document.getElementById('nama').value;
+            const email = document.getElementById('email').value;
+            const password = document.getElementById('password').value;
+            const template = document.getElementById('template').value;
+            const formMessage = document.getElementById('formMessage');
+            formMessage.textContent = ''; // Bersihkan pesan error sebelumnya
+
+            if (!nama.trim() || !email.trim() || !password.trim() || !template) {
+                formMessage.textContent = "Semua field wajib diisi, termasuk memilih jenjang.";
+                return;
+            }
+            if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
+                formMessage.textContent = "Format email tidak valid.";
+                return;
+            }
+
+            userEmailForOtpVerification = email.trim(); // Simpan email untuk step 2
+
+            document.getElementById('signupSpinner').style.display = 'flex';
+
+            google.script.run
+                .withSuccessHandler(function(response) {
+                    document.getElementById('signupSpinner').style.display = 'none';
+                    if (response === "OTP_SENT") {
+                        document.getElementById('signupFormStep1').style.display = 'none';
+                        document.getElementById('displayEmail').textContent = userEmailForOtpVerification;
+                        document.getElementById('signupFormStep2').style.display = 'block';
+                        document.getElementById('otp').focus();
+                        formMessage.textContent = "OTP telah dikirim! Silakan cek email Anda.";
+                        formMessage.style.color = "green";
+
+                    } else {
+                        formMessage.textContent = response; // Misal: "Email sudah terdaftar!"
+                        formMessage.style.color = "red";
+                    }
+                })
+                .withFailureHandler(function(error) {
+                    document.getElementById('signupSpinner').style.display = 'none';
+                    formMessage.textContent = "Terjadi kesalahan: " + error.message;
+                    formMessage.style.color = "red";
+                })
+                .initiateSignupVerification(nama.trim(), userEmailForOtpVerification, password, template);
+        }
+
+        function handleSignupStep2() {
+            const otp = document.getElementById('otp').value;
+            const formMessage = document.getElementById('formMessage');
+            formMessage.textContent = ''; // Bersihkan pesan error sebelumnya
+
+            if (!otp.trim() || otp.trim().length !== 6 || !/^\d{6}$/.test(otp.trim()) ) {
+                formMessage.textContent = "Masukkan 6 digit kode OTP yang valid.";
+                formMessage.style.color = "red";
+                return;
+            }
+            if (!userEmailForOtpVerification) {
+                formMessage.textContent = "Sesi email tidak ditemukan. Silakan ulangi dari awal.";
+                formMessage.style.color = "red";
+                // Arahkan kembali ke step 1 atau refresh
+                document.getElementById('signupFormStep2').style.display = 'none';
+                document.getElementById('signupFormStep1').style.display = 'block';
+                return;
+            }
+
+            document.getElementById('signupSpinner').style.display = 'flex';
+            google.script.run
+                .withSuccessHandler(function(response) {
+                    document.getElementById('signupSpinner').style.display = 'none';
+                    if (typeof response === 'string' && response.startsWith("https://")) {
+                        formMessage.textContent = "Pendaftaran berhasil! Anda akan diarahkan...";
+                        formMessage.style.color = "green";
+                        setTimeout(function() { window.location.href = response; }, 2000);
+                    } else {
+                        formMessage.textContent = response; // Misal: "OTP tidak valid"
+                        formMessage.style.color = "red";
+                    }
+                })
+                .withFailureHandler(function(error) {
+                    document.getElementById('signupSpinner').style.display = 'none';
+                    formMessage.textContent = "Terjadi kesalahan verifikasi: " + error.message;
+                    formMessage.style.color = "red";
+                })
+                .completeSignup(userEmailForOtpVerification, otp.trim());
+        }
+    </script>
+</body>
+</html>
