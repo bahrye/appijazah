@@ -1,0 +1,510 @@
+// Tambahkan ini di bagian atas file code.gs
+const TARGET_TEMPLATE_ID = "17m_vaxxtQSB3vHUqyas428YCDAZJi6WUfXiZGAPu9P4";
+
+// Konstanta TEMPLATE_MAP yang lama mungkin tidak lagi digunakan untuk ID,
+// namun nilai "Template A", "Template B", "Template C" dari dropdown masih relevan
+// untuk menentukan jenjang MI/MTS/MA.
+// const TEMPLATE_MAP = {
+//   "Template A": "1w9XUHXsyp6fghj0BV0665QyJRrTZRO88Nl3UpgSK29A",
+//   "Template B": "1nep-sdv44_EAzbca9B-1T1dRlCAWqH8Zp8NDqlDJrEg",
+//   "Template C": "17m_vaxxtQSB3vHUqyas428YCDAZJi6WUfXiZGAPu9P4" // Ini ID yang akan kita gunakan selalu
+// };
+
+const FOLDER_ID = '1MGpJiAP1RL8fHo5Fn3q3MSCAT5-_rwfX';
+const OTP_EXPIRATION_MINUTES = 10;
+const RESET_URL_EXPIRATION_MINUTES = 10;
+
+const SIGNUP_OTP_SHEET_NAME = 'SIGNUP_OTP_DATA';
+
+function doGet(e) {
+  const page = e.parameter.page || 'login';
+  return HtmlService.createTemplateFromFile(page)
+    .evaluate()
+    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL)
+    .setTitle('Aplikasi Pengolahan Ijazah');
+}
+
+function include(filename) {
+  return HtmlService.createHtmlOutputFromFile(filename).getContent();
+}
+
+function buatSalinanSpreadsheetUntukUser(namaUser, email, templateName) {
+  const templateFile = DriveApp.getFileById(TARGET_TEMPLATE_ID); // Selalu gunakan ID Template C
+  const folder = DriveApp.getFolderById(FOLDER_ID);
+  const salinan = templateFile.makeCopy(`${namaUser}_Sheet`, folder);
+
+  salinan.addEditor(email);
+  return salinan.getUrl();
+}
+
+/*
+function signupUser(nama, email, password, templateName) {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('DATA_USER');
+  const data = sheet.getDataRange().getValues();
+
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][1] === email) {
+      return "❌ Email sudah terdaftar!";
+    }
+  }
+
+  try {
+    const newUrl = buatSalinanSpreadsheetUntukUser(nama, email, templateName);
+    sheet.appendRow([nama, email, password, newUrl, templateName]);
+    return newUrl;
+  } catch (err) {
+    return `❌ Gagal membuat file: ${err.message}`;
+  }
+}
+*/
+
+// FUNGSI BARU untuk mengirim OTP pendaftaran
+function initiateSignupVerification(nama, email, password, templateName) {
+  const userSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('DATA_USER');
+  const userData = userSheet.getDataRange().getValues();
+
+  for (let i = 1; i < userData.length; i++) {
+    if (userData[i][1] === email) { // Kolom Email adalah index 1 (Kolom B)
+      return "❌ Email sudah terdaftar!";
+    }
+  }
+
+  let signupOtpSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SIGNUP_OTP_SHEET_NAME);
+  if (!signupOtpSheet) {
+    signupOtpSheet = SpreadsheetApp.getActiveSpreadsheet().insertSheet(SIGNUP_OTP_SHEET_NAME);
+    // Header yang BENAR untuk HashedPassword dan Salt
+    signupOtpSheet.appendRow(['Email', 'OTP', 'ExpirationTime', 'Nama', 'HashedPassword', 'Salt', 'TemplateName']);
+    signupOtpSheet.getRange("A1:G1").setFontWeight("bold").setBackground("#f0f0f0");
+    signupOtpSheet.setFrozenRows(1);
+  }
+
+  const otp = Math.floor(100000 + Math.random() * 900000);
+  const expirationTime = new Date(new Date().getTime() + OTP_EXPIRATION_MINUTES * 60000);
+
+  // HASING DILAKUKAN DI SINI
+  const salt = generateSalt();
+  const hashedPassword = computePasswordHash(password, salt);
+
+  // Simpan HASHEDPASSWORD dan SALT, bukan password plaintext
+  signupOtpSheet.appendRow([email, otp, expirationTime, nama, hashedPassword, salt, templateName]);
+
+  MailApp.sendEmail({
+    to: email,
+    subject: "Kode OTP untuk Verifikasi Pendaftaran Akun",
+    htmlBody: `<p>Gunakan kode OTP berikut untuk menyelesaikan pendaftaran akun Anda: <strong>${otp}</strong>.</p><p>Kode ini akan kadaluarsa dalam ${OTP_EXPIRATION_MINUTES} menit.</p>`
+  });
+
+  return "OTP_SENT"; // Indikator sukses ke client
+}
+
+// FUNGSI BARU untuk memverifikasi OTP dan menyelesaikan pendaftaran
+function completeSignup(email, otp) {
+  const signupOtpSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SIGNUP_OTP_SHEET_NAME);
+  if (!signupOtpSheet) {
+     return "❌ Kesalahan sistem: Sheet data OTP tidak ditemukan.";
+  }
+  const otpData = signupOtpSheet.getDataRange().getValues();
+  const now = new Date();
+  let userToCreate = null;
+  let rowIndex = -1; 
+
+  for (let i = otpData.length - 1; i >= 1; i--) { 
+    // Ambil HASHEDPASSWORD dan SALT dari SIGNUP_OTP_DATA
+    // Urutan kolom: Email, OTP, ExpirationTime, Nama, HashedPassword, Salt, TemplateName
+    const [storedEmail, storedOtp, expirationTime, nama, hashedPassword, salt, templateName] = otpData[i];
+    
+    if (storedEmail === email && String(storedOtp) === String(otp)) {
+      if (now > new Date(expirationTime)) {
+        return "❌ OTP sudah kadaluarsa. Silakan coba kirim ulang OTP.";
+      }
+      // Simpan hashedPassword dan salt untuk userToCreate
+      userToCreate = { nama, email, hashedPassword, salt, templateName };
+      rowIndex = i; 
+      break; 
+    }
+  }
+
+  if (!userToCreate) {
+    return "❌ OTP tidak valid atau email tidak cocok.";
+  }
+
+  try {
+    // Pastikan fungsi buatSalinanSpreadsheetUntukUser sudah benar (lihat catatan tambahan di bawah)
+    const newUrl = buatSalinanSpreadsheetUntukUser(userToCreate.nama, userToCreate.email, userToCreate.templateName);
+    const dataUserSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('DATA_USER');
+    
+    // Simpan ke DATA_USER dengan HASHEDPASSWORD dan SALT
+    // Urutan kolom DATA_USER: Nama, Email, HashedPassword, Salt, SpreadsheetURL, TemplateName
+    dataUserSheet.appendRow([
+      userToCreate.nama, 
+      userToCreate.email, 
+      userToCreate.hashedPassword, // hashedPassword yang disimpan
+      userToCreate.salt,           // salt yang disimpan
+      newUrl, 
+      userToCreate.templateName
+    ]);
+
+    signupOtpSheet.deleteRow(rowIndex + 1); 
+    return newUrl;
+  } catch (err) {
+    Logger.log(`Error in completeSignup for email ${email}: ${err.message}\nStack: ${err.stack}`);
+    return `❌ Gagal menyelesaikan pendaftaran: Terjadi kesalahan pada server. (${err.message})`;
+  }
+}
+
+function loginUser(email, password) {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('DATA_USER');
+  const dataRange = sheet.getDataRange(); // Ambil seluruh rentang data
+  const data = dataRange.getValues();     // Ambil nilainya (termasuk header)
+
+  // Indeks kolom berdasarkan struktur (0-based):
+  // 0: Nama, 1: Email, 2: HashedPassword, 3: Salt, 4: SpreadsheetURL, 5: TemplateName
+  const EMAIL_COL = 1;
+  const HASHED_PASS_COL = 2;
+  const SALT_COL = 3;
+  const URL_COL = 4;
+
+  for (let i = 1; i < data.length; i++) { // Mulai dari i = 1 untuk melewati baris header
+    const currentRow = data[i];
+    const storedEmail = currentRow[EMAIL_COL];
+
+    if (storedEmail === email) {
+      const storedPasswordValue = currentRow[HASHED_PASS_COL]; // Bisa jadi plaintext atau hash
+      const storedSalt = currentRow[SALT_COL];
+      const spreadsheetUrl = currentRow[URL_COL];
+
+      if (storedSalt && storedSalt !== "") {
+        // Pengguna ini memiliki salt, berarti password sudah di-hash
+        const inputHashedPassword = computePasswordHash(password, storedSalt);
+        if (inputHashedPassword === storedPasswordValue) {
+          Logger.log(`Login berhasil (hashed) untuk: ${email}`);
+          return spreadsheetUrl; // Login berhasil
+        } else {
+          Logger.log(`Login gagal (hashed, password salah) untuk: ${email}`);
+          return "❌ Login gagal! Email atau password salah."; // Password hash tidak cocok
+        }
+      } else {
+        // Tidak ada salt, berarti pengguna lama dengan password plaintext
+        // storedPasswordValue di sini adalah password plaintext
+        if (password === storedPasswordValue) {
+          // Password plaintext cocok, login berhasil. SEKARANG MIGRASIKAN PASSWORD!
+          Logger.log(`Login berhasil (plaintext) untuk: ${email}. Memigrasikan password...`);
+          try {
+            const newSalt = generateSalt();
+            const newHashedPassword = computePasswordHash(password, newSalt);
+
+            // Update baris di sheet. Ingat, getRange menggunakan 1-based indexing.
+            // Baris di sheet adalah i + 1 (karena array 'data' 0-based dan data[0] adalah header).
+            // Kolom HashedPassword adalah HASHED_PASS_COL + 1 (misal, kolom C adalah 2+1=3).
+            // Kolom Salt adalah SALT_COL + 1 (misal, kolom D adalah 3+1=4).
+            sheet.getRange(i + 1, HASHED_PASS_COL + 1).setValue(newHashedPassword);
+            sheet.getRange(i + 1, SALT_COL + 1).setValue(newSalt);
+            
+            SpreadsheetApp.flush(); // Pastikan perubahan langsung ditulis ke sheet
+            Logger.log(`Password untuk ${email} berhasil dimigrasi ke hash.`);
+            return spreadsheetUrl; // Login berhasil & migrasi selesai
+          } catch (e) {
+            Logger.log(`KRITICAL: Error saat migrasi password untuk ${email} setelah login plaintext berhasil: ${e.message}. Stack: ${e.stack}`);
+            // Login tetap berhasil karena password plaintext cocok, TAPI migrasi gagal.
+            // Ini perlu perhatian. Pengguna tetap bisa login tapi passwordnya belum ter-hash.
+            // Anda bisa memilih untuk tetap mengizinkan login atau menggagalkannya jika migrasi gagal.
+            // Untuk saat ini, kita izinkan login, tapi log error ini sangat penting.
+            return spreadsheetUrl; 
+          }
+        } else {
+          Logger.log(`Login gagal (plaintext, password salah) untuk: ${email}`);
+          return "❌ Login gagal! Email atau password salah."; // Password plaintext tidak cocok
+        }
+      }
+    }
+  }
+  Logger.log(`Login gagal (email tidak ditemukan) untuk percobaan email: ${email}`);
+  return "❌ Login gagal! Email atau password salah."; // Email tidak ditemukan
+}
+
+function sendOtp(email) {
+  const userSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('DATA_USER');
+  const otpSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('OTP_TEMP');
+  const data = userSheet.getDataRange().getValues();
+
+  let found = false;
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][1] === email) {
+      found = true;
+      break;
+    }
+  }
+
+  if (!found) return "❌ Email tidak ditemukan.";
+
+  const otp = Math.floor(100000 + Math.random() * 900000);
+  const expirationTime = new Date(new Date().getTime() + OTP_EXPIRATION_MINUTES * 60000);
+  otpSheet.appendRow([email, otp, expirationTime]);
+
+  MailApp.sendEmail({
+    to: email,
+    subject: "OTP untuk Reset Password",
+    htmlBody: `<p>Gunakan kode OTP berikut untuk mereset password Anda: <strong>${otp}</strong></p>`
+  });
+
+  return "✅ OTP telah dikirim ke email Anda.";
+}
+
+function verifyOtpAndReset(email, otp, newPassword) {
+  const otpSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('OTP_TEMP');
+  const userSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('DATA_USER');
+
+  const otps = otpSheet.getDataRange().getValues();
+  const now = new Date();
+
+  for (let i = 1; i < otps.length; i++) {
+    const [storedEmail, storedOtp, expirationTime] = otps[i];
+
+    if (storedEmail === email && storedOtp == otp) {
+      if (now > new Date(expirationTime)) return "❌ OTP sudah kadaluarsa.";
+
+      const users = userSheet.getDataRange().getValues();
+      for (let j = 1; j < users.length; j++) {
+        if (users[j][1] === email) {
+          const newSalt = generateSalt();
+          const newHashedPassword = computePasswordHash(newPassword, newSalt);
+          userSheet.getRange(j + 1, 3).setValue(newHashedPassword); // Kolom C untuk HashedPassword
+          userSheet.getRange(j + 1, 4).setValue(newSalt);         // Kolom D untuk Salt (pastikan kolom D ada)
+          return "✅ Password berhasil direset.";
+        }
+      }
+    }
+  }
+
+  return "❌ OTP tidak valid.";
+}
+
+// Tambahkan ini di bagian atas file code.gs (jika belum ada)
+// const TARGET_TEMPLATE_ID = "17m_vaxxtQSB3vHUqyas428YCDAZJi6WUfXiZGAPu9P4"; // Sudah ada
+// const FOLDER_ID = '1MGpJiAP1RL8fHo5Fn3q3MSCAT5-_rwfX'; // Sudah ada
+
+function buatSalinanSpreadsheetUntukUser(namaUser, email, clientTemplateChoice) {
+  const templateFile = DriveApp.getFileById(TARGET_TEMPLATE_ID);
+  const folder = DriveApp.getFolderById(FOLDER_ID);
+  
+  const timestamp = new Date().getTime(); 
+  const copyName = `${namaUser}_${clientTemplateChoice.replace("Template ", "")}_${timestamp}`; 
+  
+  const salinan = templateFile.makeCopy(copyName, folder);
+  
+  // --- AWAL PERUBAHAN ---
+  // Baris lama yang mengirim email:
+  // salinan.addEditor(email); 
+
+  // Kode baru untuk menambahkan editor tanpa mengirim notifikasi email
+  try {
+    const permissionResource = {
+      'role': 'writer', // Memberikan hak akses edit (setara dengan editor)
+      'type': 'user',   // Tipe izin adalah untuk pengguna spesifik
+      'value': email    // Alamat email pengguna yang akan diberi akses
+    };
+    Drive.Permissions.insert(permissionResource, salinan.getId(), {
+      'sendNotificationEmails': false // Parameter penting untuk tidak mengirim email
+    });
+    Logger.log(`Editor ${email} berhasil ditambahkan ke file ${salinan.getName()} (${salinan.getId()}) tanpa notifikasi email.`);
+  } catch (e) {
+    // Jika terjadi error saat menambahkan editor tanpa notifikasi,
+    // kita bisa kembali menggunakan cara lama (yang akan mengirim email) sebagai fallback
+    // atau menangani error sesuai kebutuhan.
+    Logger.log(`Error saat menambahkan editor tanpa notifikasi untuk ${email} ke file ${salinan.getId()}: ${e.message}. Mencoba menambahkan editor dengan notifikasi default.`);
+    try {
+      salinan.addEditor(email); // Fallback ke metode standar jika API gagal
+      Logger.log(`Editor ${email} ditambahkan ke file ${salinan.getId()} dengan notifikasi email (fallback).`);
+    } catch (fallbackError) {
+      Logger.log(`Error saat fallback addEditor untuk ${email} ke file ${salinan.getId()}: ${fallbackError.message}. Pengguna mungkin tidak mendapatkan akses.`);
+      // Anda mungkin ingin melemparkan error di sini jika akses sangat krusial
+      // throw new Error(`Gagal total memberikan akses editor untuk ${email} ke file ${salinan.getId()}: ${fallbackError.message}`);
+    }
+  }
+  // --- AKHIR PERUBAHAN ---
+  
+  const newSpreadsheetUrl = salinan.getUrl();
+  const newSpreadsheet = SpreadsheetApp.openById(salinan.getId());
+
+  let educationalLevel = '';
+  let sheetToShowName = '';
+  const allMapelVariantSheetNames = ["DATA MAPEL", "DATA MAPEL MI", "DATA MAPEL MA"];
+
+  if (clientTemplateChoice === "Template A") {
+    educationalLevel = "MI";
+    sheetToShowName = "DATA MAPEL MI";
+  } else if (clientTemplateChoice === "Template B") {
+    educationalLevel = "MTS";
+    sheetToShowName = "DATA MAPEL";
+  } else if (clientTemplateChoice === "Template C") {
+    educationalLevel = "MA";
+    sheetToShowName = "DATA MAPEL MA";
+  }
+
+  if (educationalLevel) {
+    const homeSheet = newSpreadsheet.getSheetByName('HOME');
+    if (homeSheet) {
+      try {
+        homeSheet.getRange('D6').setValue(educationalLevel);
+        homeSheet.getRange('D7').setValue(namaUser.toUpperCase());
+      } catch (e) {
+        Logger.log(`Error: Gagal mengatur nilai D6 di sheet HOME untuk spreadsheet ${copyName}. Pesan: ${e.message}`);
+      }
+    } else {
+      Logger.log(`Error: Sheet "HOME" tidak ditemukan di spreadsheet ${copyName}.`);
+    }
+
+    const sheetForThisLevel = newSpreadsheet.getSheetByName(sheetToShowName);
+    if (sheetForThisLevel) {
+      try {
+        sheetForThisLevel.showSheet();
+      } catch (e) {
+        // Abaikan error jika sheet sudah terlihat
+      }
+    } else {
+      Logger.log(`Peringatan: Sheet DATA MAPEL "${sheetToShowName}" untuk jenjang "${educationalLevel}" tidak ditemukan di template ${copyName}.`);
+    }
+
+    allMapelVariantSheetNames.forEach(name => {
+      if (name !== sheetToShowName) {
+        const sheetToHide = newSpreadsheet.getSheetByName(name);
+        if (sheetToHide) {
+          try {
+            sheetToHide.hideSheet();
+          } catch (e) {
+            Logger.log(`Error: Gagal menyembunyikan sheet ${name} untuk spreadsheet ${copyName}. Pesan: ${e.message}`);
+          }
+        }
+      }
+    });
+    
+    if (homeSheet) {
+        try {
+            if (homeSheet.isSheetHidden()) {
+                homeSheet.showSheet();
+            }
+            newSpreadsheet.setActiveSheet(homeSheet);
+        } catch (e) {
+            Logger.log(`Error saat mengaktifkan sheet HOME untuk ${copyName}: ${e.message}`);
+        }
+    }
+
+  } else {
+    Logger.log(`Peringatan: Pilihan template "${clientTemplateChoice}" tidak dikenali untuk ${copyName}. Tidak ada kustomisasi jenjang dilakukan.`);
+  }
+
+  Logger.log(`Memulai penandaan sheet yang diizinkan untuk ${newSpreadsheet.getName()}...`);
+  const finalSheetsInNewSpreadsheet = newSpreadsheet.getSheets();
+  for (const sheet of finalSheetsInNewSpreadsheet) {
+    const sheetName = sheet.getName();
+    try {
+      // Hapus tag lama jika ada (untuk kebersihan, meskipun pada salinan baru biasanya tidak perlu)
+      const existingMetadataArray = sheet.getDeveloperMetadata(); // Ini mengembalikan array
+      for (const md of existingMetadataArray) {
+        if (md.getKey() === 'allowedSheetTag') {
+          md.remove(); // Hapus metadata lama dengan key yang sama
+          Logger.log(`Metadata 'allowedSheetTag' lama dihapus dari sheet "${sheetName}".`);
+        }
+      }
+      // Tambahkan tag baru. Visibilitas DOCUMENT berarti hanya skrip yang bisa melihat/mengakses.
+      sheet.addDeveloperMetadata('allowedSheetTag', 'true', SpreadsheetApp.DeveloperMetadataVisibility.DOCUMENT);
+      Logger.log(`Sheet "${sheetName}" berhasil ditandai sebagai diizinkan di ${newSpreadsheet.getName()}.`);
+    } catch (metaErr) {
+      Logger.log(`Error saat menandai sheet "${sheetName}" di ${newSpreadsheet.getName()}: ${metaErr.message}`);
+    }
+  }
+  Logger.log(`Selesai menandai sheet yang diizinkan untuk ${newSpreadsheet.getName()}.`);
+
+  // --- AWAL PEMBUATAN TRIGGER BARU (gunakan nama handler baru) ---
+  try {
+    const triggers = ScriptApp.getUserTriggers(newSpreadsheet);
+    let triggerExists = false;
+    for (const trigger of triggers) {
+      if (trigger.getEventType() === ScriptApp.EventType.ON_CHANGE && trigger.getHandlerFunction() === 'enforceSheetPolicyUsingMetadata') {
+        // Jika Anda ingin hanya satu trigger jenis ini, Anda bisa set triggerExists = true atau hapus dan buat ulang.
+        // Untuk menghindari duplikasi jika skrip ini dijalankan ulang pada spreadsheet yang sama:
+        Logger.log(`Menghapus trigger 'enforceSheetPolicyUsingMetadata' lama yang ada untuk ${newSpreadsheet.getName()}.`);
+        ScriptApp.deleteTrigger(trigger);
+      }
+    }
+
+    // Buat trigger baru dengan nama handler yang baru
+    ScriptApp.newTrigger('enforceSheetPolicyUsingMetadata') // Nama fungsi handler yang baru
+      .forSpreadsheet(newSpreadsheet)
+      .onChange()
+      .create();
+    Logger.log(`Trigger 'enforceSheetPolicyUsingMetadata' onChange berhasil dibuat untuk spreadsheet ${newSpreadsheet.getName()} (${newSpreadsheet.getId()}).`);
+  } catch (err) {
+    Logger.log(`Error saat membuat trigger onChange (enforceSheetPolicyUsingMetadata) untuk ${newSpreadsheet.getName()}: ${err.message}`);
+  }
+  // --- AKHIR PEMBUATAN TRIGGER BARU ---
+
+  return newSpreadsheetUrl;
+}
+
+function generateSalt() {
+  return Utilities.getUuid(); // Menghasilkan string unik sebagai salt
+}
+
+function computePasswordHash(password, salt) {
+  if (!password || !salt) {
+    Logger.log("Error: Password dan salt dibutuhkan untuk hashing.");
+    throw new Error("Password dan salt dibutuhkan untuk hashing.");
+  }
+  const saltedPassword = password + salt; // Gabungkan password dengan salt
+  const digest = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, saltedPassword, Utilities.Charset.UTF_8);
+  // Konversi byte array hasil digest ke string heksadesimal
+  return digest.map(byte => {
+    const b = byte & 0xFF; // Pastikan byte positif
+    return ('0' + b.toString(16)).slice(-2); // Tambahkan '0' di depan jika perlu & ambil 2 karakter terakhir
+  }).join('');
+}
+
+
+function enforceSheetPolicyUsingMetadata(e) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  // Log awal untuk memantau pemicuan
+  const eventType = e ? e.changeType : 'UNKNOWN';
+  const source = e && e.source ? e.source.getId() : 'UNKNOWN_SOURCE_ID';
+  Logger.log(`Memicu enforceSheetPolicyUsingMetadata untuk spreadsheet: ${ss.getName()} (ID: ${ss.getId()}), Sumber ID: ${source}, Jenis Perubahan: ${eventType}`);
+
+  const currentSheets = ss.getSheets();
+  let sheetsDeletedCount = 0;
+
+  for (const sheet of currentSheets) {
+    const sheetName = sheet.getName();
+    let isAllowed = false;
+    try {
+      const metadataArray = sheet.getDeveloperMetadata(); // Ini mengembalikan array
+      for (const md of metadataArray) {
+        if (md.getKey() === 'allowedSheetTag' && md.getValue() === 'true') {
+          isAllowed = true;
+          break; // Ditemukan tag yang sesuai
+        }
+      }
+    } catch (metaErr) {
+      Logger.log(`Error saat membaca metadata untuk sheet "${sheetName}" di ${ss.getName()}: ${metaErr.message}. Mengasumsikan sheet tidak diizinkan untuk keamanan.`);
+      isAllowed = false; // Jika gagal membaca metadata, anggap tidak diizinkan
+    }
+
+    if (!isAllowed) {
+      Logger.log(`Sheet "${sheetName}" di ${ss.getName()} tidak memiliki tag 'allowedSheetTag' atau tag tidak valid.`);
+      try {
+        // PENTING: Jangan hapus sheet terakhir jika itu satu-satunya sheet yang tersisa
+        if (currentSheets.length === 1) {
+          Logger.log(`Melewati penghapusan sheet "${sheetName}" di ${ss.getName()} karena ini adalah satu-satunya sheet yang tersisa.`);
+          continue; // Jangan hapus sheet absolut terakhir
+        }
+        ss.deleteSheet(sheet);
+        sheetsDeletedCount++;
+        Logger.log(`Sheet tidak sah (tanpa tag) "${sheetName}" berhasil dihapus dari ${ss.getName()}.`);
+      } catch (err) {
+        Logger.log(`Gagal menghapus sheet tidak sah "${sheetName}" dari ${ss.getName()}: ${err.message}`);
+      }
+    }
+  }
+
+  if (sheetsDeletedCount > 0) {
+    Logger.log(`${sheetsDeletedCount} sheet tidak sah telah dihapus dari ${ss.getName()}.`);
+  }
+}
