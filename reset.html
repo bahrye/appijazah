@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top">
+    <?!= include('style'); ?>
+  </head>
+  <body>
+    <div class="container">
+      <h2>Reset Password</h2>
+      <div id="step1">
+        <input type="email" id="email" placeholder="Email" required>
+        <button onclick="sendOtp()">Kirim OTP</button>
+      </div>
+      <div id="step2" style="display:none;">
+        <input type="text" id="otp" placeholder="Masukkan OTP" required>
+        <div class="password-wrapper">
+          <input type="password" id="newPassword" placeholder="Password Baru" required>
+          <span class="toggle-password" onclick="togglePasswordVisibility('newPassword', this)" title="Lihat password">
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+          </span>
+        </div>
+        <button onclick="resetPassword()">Reset Password</button>
+      </div>
+      <div id="resetSpinner" class="spinner-container">
+        <div class="spinner"></div>
+      </div>
+      <p><a href="<?= ScriptApp.getService().getUrl() ?>?page=login">Kembali ke login</a></p>
+    </div>
+
+    <?!= include('globalScripts'); ?>
+    <script>
+      function sendOtp() {
+        const email = document.getElementById('email').value;
+        document.getElementById('resetSpinner').style.display = 'flex';
+        google.script.run.withSuccessHandler(function(response) {
+          document.getElementById('resetSpinner').style.display = 'none';
+          alert(response);
+          if (response.includes("✅")) {
+            document.getElementById("step1").style.display = "none";
+            document.getElementById("step2").style.display = "block";
+          }
+        }).sendOtp(email);
+      }
+
+      function resetPassword() {
+        const email = document.getElementById('email').value;
+        const otp = document.getElementById('otp').value;
+        const newPassword = document.getElementById('newPassword').value;
+        document.getElementById('resetSpinner').style.display = 'flex';
+        google.script.run.withSuccessHandler(function(response) {
+          document.getElementById('resetSpinner').style.display = 'none';
+          alert(response);
+          if (response.includes("berhasil")) {
+            window.location.href = "<?= ScriptApp.getService().getUrl() ?>?page=login";
+          }
+        }).verifyOtpAndReset(email, otp, newPassword);
+      }
+    </script>
+  </body>
+</html>
